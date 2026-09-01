@@ -99,7 +99,7 @@ defmodule ElixirCallHierarchy.StdioServerTest do
         File.rm_rf!(workspace)
       end
 
-    assert result == {:ok, false, true, true, true, true}
+    assert result == {:ok, true, true, true, true, true}
   end
 
   test "initialize advertises call hierarchy", %{workspace: workspace} do

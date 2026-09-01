@@ -179,43 +179,12 @@ end
         fixture_resource.parent.mkdir(parents=True)
         fixture_resource.write_text("compiled dependency resource\n")
         (workspace / "deps" / "compile_fixture" / "mix.exs").write_text(
-            """defmodule Mix.Tasks.Compile.MetadataOnly do
-  use Mix.Task.Compiler
-  def run(args) do
-    marker = Path.join(System.fetch_env!("MIX_BUILD_PATH"), "metadata-only-pass")
-
-    case File.read(marker) do
-      {:error, :enoent} ->
-        File.mkdir_p!(Path.dirname(marker))
-        File.write!(marker, "1")
-        {:noop, []}
-
-      {:ok, "1"} ->
-        File.write!(marker, "2")
-        {:noop, []}
-
-      {:ok, "2"} ->
-        root_lib = Path.join(System.fetch_env!("MIX_BUILD_PATH"), "lib")
-        erl_libs = System.get_env("ERL_LIBS", "")
-
-        unless root_lib in String.split(erl_libs, if(match?({:win32, _}, :os.type()), do: ";", else: ":"), trim: true) do
-          raise "root dependency build path is unavailable to dependency compiler"
-        end
-
-        if Code.ensure_loaded?(CompileSupport),
-          do: Mix.Tasks.Compile.Elixir.run(["--force" | args]),
-          else: raise("transitive dependency module is unavailable")
-    end
-  end
-end
-
-defmodule CompileFixture.MixProject do
+            """defmodule CompileFixture.MixProject do
   use Mix.Project
   def project do
     [
       app: :compile_fixture,
       version: "0.1.0",
-      compilers: [:metadata_only, :app],
       deps: [{:compile_support, path: "../compile_support"}]
     ]
   end
@@ -317,25 +286,26 @@ end
         require("Unknown dependency prod_only" not in cold_stderr, "test excludes restored prod-only dependency")
         require("Unknown dependency target_only" not in cold_stderr, "host target excludes restored special-target dependency")
         require("undefined function ActiveTransitive.value/0" not in cold_stderr, "active transitive compiles before test-only dependent")
-        require(any(cache.rglob("fixture-compiler-ran")), "workspace custom compiler runs in Mix order")
+        workspace_build = workspace / "_build" / "test"
+        require(any(workspace_build.rglob("fixture-compiler-ran")), "workspace custom compiler runs in Mix order")
         require(
-            any(cache.rglob("Elixir.CompileFixture.beam")),
+            any(workspace_build.rglob("Elixir.CompileFixture.beam")),
             "source-bearing dependency produces its BEAM module",
         )
         require(
-            any(cache.rglob("Elixir.CompileFixture.Nested.Helper.beam")),
+            any(workspace_build.rglob("Elixir.CompileFixture.Nested.Helper.beam")),
             "multi-segment nested dependency module is qualified relative to its parent",
         )
         require(
-            any(cache.rglob("compile_fixture/priv/template.txt")),
-            "dependency compile-time resource is assembled externally",
+            any(workspace_build.rglob("compile_fixture/priv/template.txt")),
+            "dependency compile-time resource is assembled in the workspace build",
         )
 
         hierarchy(workspace, cache / "test", source, "test")
         require("\"phase\":\"deps_compile\"" in cold_stderr, "cold initialize profiles dependency compilation")
         require("redefining module Jason" not in cold_stderr, "dependency compilation does not contaminate the escript VM")
-        require(not (workspace / "_build").exists(), "workspace has no _build directory")
-        require(any(cache.rglob("index.json")), "cache artifact is outside workspace")
+        require((workspace / "_build").is_dir(), "workspace uses its conventional _build directory")
+        require(any(cache.rglob("index.json")), "index cache artifact remains outside workspace")
 
         prod_response, prod_stderr, _ = invoke(workspace, cache / "prod", initialize, "prod")
         require(prod_response["result"]["capabilities"]["callHierarchyProvider"] is True, "prod initialize advertises call hierarchy")

@@ -127,17 +127,17 @@ defmodule ElixirCallHierarchy.CacheTest do
   test "restored dependency priv resources exist during cold external compilation", ctx do
     marker = Path.join(Path.dirname(ctx.workspace), "resource-reads")
     install_resource_dependency(ctx.workspace, marker)
-    before = tree(ctx.workspace)
+    before = source_tree(ctx.workspace)
 
     assert {first_output, 0} = external_index(ctx)
     assert first_output =~ "INDEX_RESULT miss "
-    assert File.read!(marker) == "packaged resource\n"
-    assert tree(ctx.workspace) == before
-    refute File.exists?(Path.join(ctx.workspace, "_build"))
+    assert File.read(marker) == {:ok, "packaged resource\n"}, first_output
+    assert source_tree(ctx.workspace) == before
+    assert File.dir?(Path.join(ctx.workspace, "_build"))
 
     assert {second_output, 0} = external_index(ctx)
     assert second_output =~ "INDEX_RESULT hit "
-    assert File.read!(marker) == "packaged resource\n"
+    assert File.read(marker) == {:ok, "packaged resource\n"}, second_output
     assert index_digest(second_output) == index_digest(first_output)
   end
 
@@ -183,11 +183,11 @@ defmodule ElixirCallHierarchy.CacheTest do
     assert File.read!(side_effect) == "compiled\n"
   end
 
-  test "workspace receives no build or cache artifacts", ctx do
-    before = tree(ctx.workspace)
+  test "workspace build is conventional and index cache remains external", ctx do
     assert {_, %Index{}} = Cache.load(ctx.workspace, cache_dir: ctx.cache)
-    assert tree(ctx.workspace) == before
-    refute File.exists?(Path.join(ctx.workspace, "_build"))
+    assert File.dir?(Path.join(ctx.workspace, "_build"))
+    refute File.exists?(Path.join(ctx.workspace, ".elixir-call-hierarchy"))
+    assert File.regular?(cache_index(ctx))
   end
 
   defp external_load(ctx, side_effect) do
@@ -231,11 +231,15 @@ defmodule ElixirCallHierarchy.CacheTest do
     File.mkdir_p!(Path.join(dependency, "priv"))
     File.write!(Path.join(dependency, "priv/resource.txt"), "packaged resource")
 
-    File.write!(Path.join(dependency, "mix.exs"), """
-    defmodule ResourceDep.MixProject do
-      use Mix.Project
-      def project, do: [app: :resource_dep, version: "0.1.0", compilers: [:erlang, :app]]
-    end
+    File.write!(Path.join(dependency, "rebar.config"), "{erl_opts, [debug_info]}.\n")
+
+    File.write!(Path.join(dependency, "src/resource_dep.app.src"), """
+    {application, resource_dep,
+     [{description, "Rebar compile-time resource fixture"},
+      {vsn, "0.1.0"},
+      {modules, [resource_pt, resource_user]},
+      {registered, []},
+      {applications, [kernel, stdlib]}]}.
     """)
 
     File.write!(Path.join(dependency, "src/resource_pt.erl"), """
@@ -274,6 +278,14 @@ defmodule ElixirCallHierarchy.CacheTest do
   end
 
   defp tree(path), do: path |> Path.join("**/*") |> Path.wildcard() |> Enum.sort()
+
+  defp source_tree(path) do
+    path
+    |> tree()
+    |> Enum.reject(&String.contains?(&1, "/_build/"))
+    |> Enum.reject(&String.ends_with?(&1, "/_build"))
+    |> Enum.reject(&String.ends_with?(&1, "/rebar.lock"))
+  end
 
   defp restore(workspace, "lib/calls.ex"),
     do: File.write!(Path.join(workspace, "lib/calls.ex"), fixture_source("one"))
