@@ -4,6 +4,7 @@ import os
 import pathlib
 import select
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -84,6 +85,73 @@ def hierarchy(workspace, cache, source, mix_env):
             process.wait(timeout=2)
         except subprocess.TimeoutExpired:
             process.kill()
+
+
+def worker_stdin_eof_probe(workspace, cache, marker, request):
+    env = os.environ.copy()
+    env.update(
+        {
+            "XDG_CACHE_HOME": str(cache),
+            "ECH_BLOCK_COMPILER": str(marker),
+            "MIX_ENV": "test",
+            "MIX_TARGET": "host",
+        }
+    )
+    process = subprocess.Popen(
+        [str(ESCRIPT), "--stdio", "--profile"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=PROJECT,
+        env=env,
+        start_new_session=True,
+    )
+    stderr = b""
+    deadline = time.monotonic() + 5
+    try:
+        process.stdin.write(request)
+        process.stdin.flush()
+        while not marker.exists() and time.monotonic() < deadline:
+            if process.poll() is not None:
+                stderr += process.stderr.read()
+                raise AssertionError(
+                    f"worker exited before stdin probe marker (stderr={stderr[-8000:].decode(errors='replace')!r})"
+                )
+            time.sleep(0.01)
+        require(marker.exists(), "worker reaches stdin-reading project compiler")
+
+        response = read_framed(process.stdout, deadline)
+        require(
+            response["result"]["capabilities"]["callHierarchyProvider"] is True,
+            "workspace worker receives stdin EOF and initialize completes",
+        )
+    finally:
+        worker_pid = int(marker.read_text()) if marker.exists() else None
+        os.killpg(process.pid, signal.SIGTERM)
+        if worker_pid is not None:
+            try:
+                os.kill(worker_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=2)
+        if worker_pid is not None:
+            try:
+                os.kill(worker_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            cleanup_deadline = time.monotonic() + 2
+            while time.monotonic() < cleanup_deadline:
+                try:
+                    os.kill(worker_pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.01)
+            else:
+                raise AssertionError(f"stdin probe worker {worker_pid} survived cleanup")
 
 
 def invoke(workspace, cache, request, mix_env, timeout=TIMEOUT):
@@ -223,6 +291,11 @@ end
       raise "active transitive dependency module is unavailable during project compilation"
     end
 
+    if marker = System.get_env("ECH_BLOCK_COMPILER") do
+      File.write!(marker, System.pid())
+      IO.read(:stdio, :all)
+    end
+
     File.write!(Path.join(Mix.Project.build_path(), "fixture-compiler-ran"), "ok")
     {:ok, []}
   end
@@ -302,6 +375,12 @@ end
         )
 
         hierarchy(workspace, cache / "test", source, "test")
+        worker_stdin_eof_probe(
+            workspace,
+            cache / "stdin-eof",
+            base / "stdin-reading-compiler-started",
+            initialize,
+        )
         require("\"phase\":\"deps_compile\"" in cold_stderr, "cold initialize profiles dependency compilation")
         require("redefining module Jason" not in cold_stderr, "dependency compilation does not contaminate the escript VM")
         require((workspace / "_build").is_dir(), "workspace uses its conventional _build directory")

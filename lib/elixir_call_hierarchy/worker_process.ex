@@ -33,7 +33,14 @@ defmodule ElixirCallHierarchy.WorkerProcess do
 
     try do
       args = [bundle_path, root, build_path, artifact_path, fingerprint, to_string(profile?)]
-      {output, status} = System.cmd(elixir_executable(), args, env: env, stderr_to_stdout: true)
+      command = [elixir_executable() | args]
+
+      {output, status} =
+        System.cmd(shell_executable(), ["-c", ~S(exec "$@" </dev/null), "ech-worker" | command],
+          env: env,
+          stderr_to_stdout: true
+        )
+
       relay_diagnostics(output)
 
       with 0 <- status,
@@ -41,7 +48,7 @@ defmodule ElixirCallHierarchy.WorkerProcess do
            {:ok, index} <- ElixirCallHierarchy.Cache.decode_index(json, fingerprint) do
         {:ok, index}
       else
-        _ -> raise "workspace index worker failed with exit status #{status}"
+        _ -> raise worker_failure_message(status, output)
       end
     after
       File.rm(artifact_path)
@@ -50,6 +57,34 @@ defmodule ElixirCallHierarchy.WorkerProcess do
 
   defp elixir_executable do
     System.find_executable("elixir") || raise "inherited elixir executable not found"
+  end
+
+  defp shell_executable do
+    System.find_executable("sh") || raise "POSIX shell executable not found"
+  end
+
+  defp worker_failure_message(status, output) do
+    message = "workspace index worker failed with exit status #{status}"
+
+    if String.contains?(output, ~s(Could not find "rebar3")) do
+      message <>
+        """
+
+        rebar3 is required to compile this workspace.
+
+        Install it for the active Elixir/OTP toolchain:
+
+          mix local.rebar --force
+
+        If the server is launched through mise, run:
+
+          mise x -- mix local.rebar --force
+
+        Then retry initialization. The server does not install build tools or run deps.get automatically.
+        """
+    else
+      message
+    end
   end
 
   defp relay_diagnostics(""), do: :ok

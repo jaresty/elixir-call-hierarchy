@@ -141,6 +141,31 @@ defmodule ElixirCallHierarchy.CacheTest do
     assert index_digest(second_output) == index_digest(first_output)
   end
 
+  test "missing rebar3 fails with explicit installation guidance", ctx do
+    marker = Path.join(Path.dirname(ctx.workspace), "resource-reads")
+    install_resource_dependency(ctx.workspace, marker)
+    previous = System.get_env("MIX_REBAR3")
+    missing_rebar = Path.join(Path.dirname(ctx.workspace), "missing-rebar3")
+    File.write!(missing_rebar, ~s(#!/bin/sh\necho 'Could not find "rebar3"' >&2\nexit 1\n))
+    File.chmod!(missing_rebar, 0o700)
+    System.put_env("MIX_REBAR3", missing_rebar)
+
+    try do
+      error =
+        assert_raise RuntimeError, fn ->
+          Cache.load(ctx.workspace, cache_dir: ctx.cache)
+        end
+
+      assert error.message =~ "rebar3 is required to compile this workspace"
+      assert error.message =~ "mise x -- mix local.rebar --force"
+      assert error.message =~ "does not install build tools or run deps.get"
+    after
+      if previous,
+        do: System.put_env("MIX_REBAR3", previous),
+        else: System.delete_env("MIX_REBAR3")
+    end
+  end
+
   test "reindex recompiles unchanged inputs", ctx do
     marker = Path.join(Path.dirname(ctx.workspace), "reindex-side-effect")
     previous = System.get_env("ECH_COMPILE_SIDE_EFFECT")
