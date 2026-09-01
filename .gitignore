@@ -4,3 +4,4 @@
 /doc/
 /.elixir_ls/
 /elixir-call-hierarchy
+/test/__pycache__/
