@@ -78,11 +78,16 @@ defmodule ElixirCallHierarchy.Index do
 
   defp definitions(file) do
     source = File.read!(file)
+    source_lines = String.split(source, "\n")
     {:ok, ast} = Code.string_to_quoted(source, columns: true, token_metadata: true)
     {_ast, {_module, found}} = Macro.traverse(ast, {nil, []}, &pre/2, &post/2)
 
     found
-    |> Enum.map(&%{&1 | file: Path.expand(file)})
+    |> Enum.map(fn definition ->
+      end_character = source_lines |> Enum.at(definition.range.end.line, "") |> String.length()
+      range = %{definition.range | end: %{definition.range.end | character: end_character}}
+      %{definition | file: Path.expand(file), range: range}
+    end)
     |> Enum.reverse()
     |> Enum.group_by(& &1.identity)
     |> Enum.map(fn {identity, clauses} ->
@@ -145,32 +150,44 @@ defmodule ElixirCallHierarchy.Index do
   end
 
   defp compile_project(root, previous_options, profile?) do
-    Mix.Project.in_project(:elixir_call_hierarchy_workspace, root, fn _ ->
-      Mix.Task.clear()
-      config = Path.join(root, "config/config.exs")
-      if File.regular?(config), do: Mix.Task.run("loadconfig", [config])
+    Code.ensure_loaded!(ElixirCallHierarchy.Tracer)
+    cache_key = {:app, :elixir_call_hierarchy_workspace}
+    previous_project = Mix.State.read_cache(cache_key)
+    Mix.State.delete_cache(cache_key)
 
-      ElixirCallHierarchy.Profile.measure(profile?, "deps_compile", fn ->
-        Mix.Task.run("deps.compile")
+    try do
+      Mix.ProjectStack.on_clean_slate(fn ->
+        Mix.Project.in_project(:elixir_call_hierarchy_workspace, root, fn _ ->
+          Mix.Task.clear()
+          config = Path.join(root, "config/config.exs")
+          if File.regular?(config), do: Mix.Task.run("loadconfig", [config])
+
+          ElixirCallHierarchy.Profile.measure(profile?, "deps_compile", fn ->
+            Mix.Task.run("deps.compile")
+          end)
+
+          ElixirCallHierarchy.Profile.measure(profile?, "deps_loadpaths", fn ->
+            Mix.Task.run("deps.loadpaths", ["--no-deps-check"])
+          end)
+
+          Code.compiler_options(tracers: [ElixirCallHierarchy.Tracer])
+
+          try do
+            case Mix.Task.run("compile", ["--force", "--no-deps-check"]) do
+              result when elem(result, 0) in [:ok, :noop] -> :ok
+              result -> raise "workspace compilation failed: #{inspect(result)}"
+            end
+          after
+            Code.compiler_options(previous_options)
+            Mix.Task.clear()
+          end
+        end)
       end)
-
-      ElixirCallHierarchy.Profile.measure(profile?, "deps_loadpaths", fn ->
-        Mix.Task.run("deps.loadpaths", ["--no-deps-check"])
-      end)
-
-      Code.ensure_loaded!(ElixirCallHierarchy.Tracer)
-      Code.compiler_options(tracers: [ElixirCallHierarchy.Tracer])
-
-      try do
-        case Mix.Task.run("compile", ["--force", "--no-deps-check"]) do
-          result when elem(result, 0) in [:ok, :noop] -> :ok
-          result -> raise "workspace compilation failed: #{inspect(result)}"
-        end
-      after
-        Code.compiler_options(previous_options)
-        Mix.Task.clear()
-      end
-    end)
+    after
+      if previous_project,
+        do: Mix.State.write_cache(cache_key, previous_project),
+        else: Mix.State.delete_cache(cache_key)
+    end
   end
 
   defp drain(calls, definitions) do

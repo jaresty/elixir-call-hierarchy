@@ -223,7 +223,7 @@ defmodule ElixirCallHierarchy.CacheTest do
 
     System.cmd("mix", ["run", "-e", expression, "--", ctx.workspace, ctx.cache],
       cd: project,
-      env: [{"ECH_COMPILE_SIDE_EFFECT", side_effect}],
+      env: [{"ECH_COMPILE_SIDE_EFFECT", side_effect}, {"MIX_ENV", "test"}],
       stderr_to_stdout: true
     )
   end
@@ -239,6 +239,7 @@ defmodule ElixirCallHierarchy.CacheTest do
 
     System.cmd("mix", ["run", "-e", expression, "--", ctx.workspace, ctx.cache],
       cd: project,
+      env: [{"MIX_ENV", "test"}],
       stderr_to_stdout: true
     )
   end

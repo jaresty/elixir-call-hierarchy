@@ -38,7 +38,9 @@ defmodule ElixirCallHierarchy.StdioServerTest do
     %{workspace: workspace}
   end
 
-  test "index loads restored dependency sources from the disposable workspace and isolates build output" do
+  test "index loads restored dependency sources from the disposable workspace and isolates build output",
+       %{workspace: prior_workspace} do
+    ElixirCallHierarchy.Index.build(prior_workspace)
     workspace = Path.join(System.tmp_dir!(), "ech-deps-#{System.unique_integer([:positive])}")
     project = Path.expand("..", __DIR__)
     File.mkdir_p!(Path.join(workspace, "lib"))
@@ -68,7 +70,7 @@ defmodule ElixirCallHierarchy.StdioServerTest do
           app: :dependency_fixture,
           version: "0.1.0",
           elixir: "~> 1.16",
-          deps: [{:jason, "~> 1.4"}, {:compile_fixture, path: "deps/compile_fixture"}]
+          deps: [{:jason, path: "deps/jason"}, {:compile_fixture, path: "deps/compile_fixture"}]
         ]
       end
     end
@@ -84,6 +86,10 @@ defmodule ElixirCallHierarchy.StdioServerTest do
     previous_build_path = System.get_env("MIX_BUILD_PATH")
     previous_deps_path = System.get_env("MIX_DEPS_PATH")
     previous_compiler_options = Code.compiler_options()
+
+    :code.purge(Jason.DecodeError)
+    :code.delete(Jason.DecodeError)
+    refute Code.loaded?(Jason.DecodeError)
 
     result =
       try do
@@ -165,6 +171,7 @@ defmodule ElixirCallHierarchy.StdioServerTest do
              ] = request(port, 3, "callHierarchy/outgoingCalls", %{"item" => caller})
 
       assert ranges != [] and Enum.all?(ranges, &non_empty?/1)
+      assert Enum.all?(ranges, &contained_range?(&1, caller["range"]))
 
       [leaf] =
         request(
@@ -231,7 +238,11 @@ defmodule ElixirCallHierarchy.StdioServerTest do
       incoming = request(port, 3, "callHierarchy/incomingCalls", %{"item" => target})
 
       assert Enum.all?(incoming, fn call ->
-               call["fromRanges"] != [] and Enum.all?(call["fromRanges"], &non_empty?/1)
+               ranges = call["fromRanges"]
+               caller = call["from"]
+
+               ranges != [] and Enum.all?(ranges, &non_empty?/1) and
+                 Enum.all?(ranges, &contained_range?(&1, caller["range"]))
              end)
     end)
   end
@@ -321,4 +332,12 @@ defmodule ElixirCallHierarchy.StdioServerTest do
 
   defp non_empty?(%{"start" => start, "end" => finish}),
     do: {start["line"], start["character"]} < {finish["line"], finish["character"]}
+
+  defp contained_range?(%{"start" => start, "end" => finish}, caller_range) do
+    caller_start = caller_range["start"]
+    caller_end = caller_range["end"]
+
+    {caller_start["line"], caller_start["character"]} <= {start["line"], start["character"]} and
+      {finish["line"], finish["character"]} <= {caller_end["line"], caller_end["character"]}
+  end
 end
