@@ -164,6 +164,7 @@ defmodule ElixirCallHierarchy.Index do
   defp compile_dependencies(root, deps_path, build_path) do
     env = dependency_compiler_env(deps_path, build_path)
     dependencies = active_dependencies(root)
+    materialize_dependency_resources(dependencies, build_path)
 
     Enum.each(dependencies, fn dependency ->
       compile_dependencies(root, dependencies, [dependency], build_path, env, MapSet.new())
@@ -388,18 +389,23 @@ defmodule ElixirCallHierarchy.Index do
 
   defp repair_dependency(app, dependency, build_path, env) do
     run_dependency_compiler("compile.app", dependency, env)
-
-    Enum.each(["priv", "include"], fn resource ->
-      source = Path.join(dependency, resource)
-
-      if File.dir?(source) do
-        destination = Path.join([build_path, "lib", app, resource])
-        File.rm_rf!(destination)
-        File.cp_r!(source, destination)
-      end
-    end)
-
+    materialize_dependency_resources([%{name: app, path: dependency}], build_path)
     run_complete_dependency_compiler(dependency, env)
+  end
+
+  defp materialize_dependency_resources(dependencies, build_path) do
+    Enum.each(dependencies, fn dependency ->
+      Enum.each(["priv", "include"], fn resource ->
+        source = Path.join(dependency.path, resource)
+
+        if File.dir?(source) do
+          destination = Path.join([build_path, "lib", dependency.name, resource])
+          File.mkdir_p!(Path.dirname(destination))
+          File.rm_rf!(destination)
+          File.cp_r!(source, destination)
+        end
+      end)
+    end)
   end
 
   defp run_complete_dependency_compiler(dependency, env) do

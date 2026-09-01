@@ -124,6 +124,23 @@ defmodule ElixirCallHierarchy.CacheTest do
     assert File.read!(side_effect) == "compiled\n"
   end
 
+  test "restored dependency priv resources exist during cold external compilation", ctx do
+    marker = Path.join(Path.dirname(ctx.workspace), "resource-reads")
+    install_resource_dependency(ctx.workspace, marker)
+    before = tree(ctx.workspace)
+
+    assert {first_output, 0} = external_index(ctx)
+    assert first_output =~ "INDEX_RESULT miss "
+    assert File.read!(marker) == "packaged resource\n"
+    assert tree(ctx.workspace) == before
+    refute File.exists?(Path.join(ctx.workspace, "_build"))
+
+    assert {second_output, 0} = external_index(ctx)
+    assert second_output =~ "INDEX_RESULT hit "
+    assert File.read!(marker) == "packaged resource\n"
+    assert index_digest(second_output) == index_digest(first_output)
+  end
+
   test "reindex recompiles unchanged inputs", ctx do
     marker = Path.join(Path.dirname(ctx.workspace), "reindex-side-effect")
     previous = System.get_env("ECH_COMPILE_SIDE_EFFECT")
@@ -184,6 +201,72 @@ defmodule ElixirCallHierarchy.CacheTest do
       env: [{"ECH_COMPILE_SIDE_EFFECT", side_effect}],
       stderr_to_stdout: true
     )
+  end
+
+  defp external_index(ctx) do
+    project = Path.expand("..", __DIR__)
+
+    expression = """
+    {status, index} = ElixirCallHierarchy.Cache.load(Enum.at(System.argv(), 0), cache_dir: Enum.at(System.argv(), 1))
+    digest = :crypto.hash(:sha256, :erlang.term_to_binary(index)) |> Base.encode16(case: :lower)
+    IO.puts("INDEX_RESULT \#{status} \#{digest}")
+    """
+
+    System.cmd("mix", ["run", "-e", expression, "--", ctx.workspace, ctx.cache],
+      cd: project,
+      stderr_to_stdout: true
+    )
+  end
+
+  defp index_digest(output) do
+    [digest] =
+      Regex.run(~r/INDEX_RESULT (?:miss|hit) ([0-9a-f]{64})/, output, capture: :all_but_first)
+
+    digest
+  end
+
+  defp install_resource_dependency(workspace, marker) do
+    dependency = Path.join(workspace, "deps/resource_dep")
+    File.mkdir_p!(Path.join(dependency, "src"))
+    File.mkdir_p!(Path.join(dependency, "priv"))
+    File.write!(Path.join(dependency, "priv/resource.txt"), "packaged resource")
+
+    File.write!(Path.join(dependency, "mix.exs"), """
+    defmodule ResourceDep.MixProject do
+      use Mix.Project
+      def project, do: [app: :resource_dep, version: "0.1.0", compilers: [:erlang, :app]]
+    end
+    """)
+
+    File.write!(Path.join(dependency, "src/resource_pt.erl"), """
+    -module(resource_pt).
+    -export([parse_transform/2]).
+
+    parse_transform(Forms, _Options) ->
+      ModulePath = code:which(?MODULE),
+      AppDir = filename:dirname(filename:dirname(ModulePath)),
+      ResourcePath = filename:join([AppDir, "priv", "resource.txt"]),
+      Resource = case file:read_file(ResourcePath) of
+        {ok, Binary} -> Binary;
+        Error -> erlang:error({missing_resource, ModulePath, ResourcePath, Error})
+      end,
+      ok = file:write_file(#{inspect(marker)}, [Resource, <<"\\n">>], [append]),
+      Forms.
+    """)
+
+    File.write!(Path.join(dependency, "src/resource_user.erl"), """
+    -module(resource_user).
+    -compile({parse_transform, resource_pt}).
+    -export([value/0]).
+    value() -> ok.
+    """)
+
+    File.write!(Path.join(workspace, "mix.exs"), """
+    defmodule Fixture.MixProject do
+      use Mix.Project
+      def project, do: [app: :fixture, version: "0.1.0", elixir: "~> 1.16", deps: [{:resource_dep, path: "deps/resource_dep"}]]
+    end
+    """)
   end
 
   defp cache_index(ctx) do
