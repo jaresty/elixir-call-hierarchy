@@ -50,6 +50,18 @@ defmodule ElixirCallHierarchy.Index do
     index.calls
     |> Enum.filter(&(&1.target == target.identity))
     |> Enum.group_by(& &1.caller)
+    |> related_definitions(index)
+  end
+
+  def outgoing(%__MODULE__{} = index, caller) do
+    index.calls
+    |> Enum.filter(&(&1.caller == caller.identity))
+    |> Enum.group_by(& &1.target)
+    |> related_definitions(index)
+  end
+
+  defp related_definitions(grouped_calls, index) do
+    grouped_calls
     |> Enum.map(fn {identity, calls} ->
       definition = Enum.find(index.definitions, &(&1.identity == identity))
 

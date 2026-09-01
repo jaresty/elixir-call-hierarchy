@@ -8,7 +8,7 @@ elixir-call-hierarchy --stdio [--cache-dir PATH] [--reindex] [--profile]
 
 `--cache-dir` overrides the compatible per-user cache location. `--reindex` clears and rebuilds only the current fingerprinted entry under its lock. `--profile` emits machine-readable `ECH_PROFILE` JSON lines on stderr for fingerprinting, cache lookup and lock wait, dependency compilation/loading, definition parsing, project compilation, tracer draining, index serialization, and total initialization. Unknown options are rejected on stderr.
 
-It supports only `initialize`, `initialized`, `textDocument/didOpen`, `textDocument/prepareCallHierarchy`, `callHierarchy/incomingCalls`, `shutdown`, and `exit` over Content-Length framed JSON-RPC stdio.
+It supports only `initialize`, `initialized`, `textDocument/didOpen`, `textDocument/documentSymbol`, `textDocument/prepareCallHierarchy`, `callHierarchy/incomingCalls`, `callHierarchy/outgoingCalls`, `shutdown`, and `exit` over Content-Length framed JSON-RPC stdio.
 
 ## Index and trust boundary
 
@@ -24,7 +24,7 @@ Each call record retains the caller module/name/arity and coalesced source defin
 
 Multiple clauses are coalesced deterministically by `{module, name, arity}`. The logical definition starts at the earliest clause start and ends at the latest clause end; prepare at any position within that span returns the one logical item.
 
-Incoming calls match the target’s exact `{module, name, arity}`. Results are grouped by caller definition and contain the compiler-observed non-empty call-site ranges. Completeness is server-relative: results are complete only for supported compiler events successfully emitted while compiling the initialized workspace. They do not claim runtime reachability, reflective/dynamic dispatch, generated code hidden from compiler metadata, external callers, or calls suppressed by failed compilation.
+Incoming calls match the target’s exact `{module, name, arity}` and are grouped by caller definition. Outgoing calls match the caller’s exact identity and are grouped by workspace-defined target; dependency or otherwise source-unresolved targets are omitted because the server cannot provide a source `CallHierarchyItem` for them. Both directions contain the compiler-observed non-empty call-site ranges. Completeness is server-relative: results are complete only for supported compiler events successfully emitted while compiling the initialized workspace. They do not claim runtime reachability, reflective/dynamic dispatch, generated code hidden from compiler metadata, external callers, or calls suppressed by failed compilation.
 
 ## Verification
 

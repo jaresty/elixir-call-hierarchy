@@ -91,6 +91,20 @@ defmodule ElixirCallHierarchy.Server do
     {state, response(id, incoming), false}
   end
 
+  defp handle(%{"id" => id, "method" => "callHierarchy/outgoingCalls", "params" => params}, state) do
+    data = get_in(params, ["item", "data"])
+    caller = %{identity: [data["module"], data["name"], data["arity"]]}
+
+    outgoing =
+      state.index
+      |> ElixirCallHierarchy.Index.outgoing(caller)
+      |> Enum.map(fn call ->
+        %{"to" => item(call.definition), "fromRanges" => Enum.map(call.ranges, &json_range/1)}
+      end)
+
+    {state, response(id, outgoing), false}
+  end
+
   defp handle(%{"id" => id, "method" => "shutdown"}, state), do: {state, response(id, nil), false}
   defp handle(%{"method" => "exit"}, state), do: {state, nil, true}
 

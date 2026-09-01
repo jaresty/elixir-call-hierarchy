@@ -22,6 +22,7 @@ defmodule ElixirCallHierarchy.StdioServerTest do
       def recursive(0), do: leaf(0)
       def recursive(v), do: leaf(v) + recursive(v - 1)
       def static_only(v), do: if(System.get_env("NEVER") == "yes", do: leaf(v), else: v)
+      def external(v), do: String.trim(v)
     end
     """)
 
@@ -134,6 +135,56 @@ defmodule ElixirCallHierarchy.StdioServerTest do
              ] = result
 
       assert end_line >= 2
+    end)
+  end
+
+  test "outgoing calls include exact targets and caller-relative ranges", %{workspace: workspace} do
+    with_server(@wrong, workspace, "outgoing", fn port ->
+      initialize(port, workspace)
+
+      [caller] =
+        request(
+          port,
+          2,
+          "textDocument/prepareCallHierarchy",
+          position(workspace, "lib/calls.ex", 3, 7)
+        )
+
+      assert [
+               %{
+                 "to" => %{
+                   "name" => "leaf/1",
+                   "data" => %{
+                     "module" => "Elixir.Fixture.Calls",
+                     "name" => "leaf",
+                     "arity" => 1
+                   }
+                 },
+                 "fromRanges" => ranges
+               }
+             ] = request(port, 3, "callHierarchy/outgoingCalls", %{"item" => caller})
+
+      assert ranges != [] and Enum.all?(ranges, &non_empty?/1)
+
+      [leaf] =
+        request(
+          port,
+          4,
+          "textDocument/prepareCallHierarchy",
+          position(workspace, "lib/calls.ex", 1, 7)
+        )
+
+      assert request(port, 5, "callHierarchy/outgoingCalls", %{"item" => leaf}) == []
+
+      [external] =
+        request(
+          port,
+          6,
+          "textDocument/prepareCallHierarchy",
+          position(workspace, "lib/calls.ex", 7, 7)
+        )
+
+      assert request(port, 7, "callHierarchy/outgoingCalls", %{"item" => external}) == []
     end)
   end
 
